@@ -1,5 +1,3 @@
-# Base64 编码解码工具
-
 # 加盐 Base64 编码解码工具
 
 部署在 Cloudflare Workers 上的编码解码工具，使用服务端加盐加密（AES-GCM + PBKDF2 + HMAC），并支持问答验证机制增强安全性。
