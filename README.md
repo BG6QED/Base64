@@ -96,9 +96,9 @@ wrangler deploy worker.js --name base64-encoder-decoder
 
 # 设置环境变量
 
-wrangler secret put ENV\_BASE\_DOMAIN
+wrangler secret put ENV_BASE_DOMAIN
 
-wrangler secret put ENV\_SECURITY\_SALT
+wrangler secret put ENV_SECURITY_SALT
 ```
 
 > **⚠️ 安全警告**
