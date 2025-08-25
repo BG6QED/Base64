@@ -78,23 +78,23 @@ npm install -g wrangler
 
 
 ```
-\# 登录Cloudflare账号
+# 登录Cloudflare账号
 
 wrangler login
 
-\# 克隆或创建项目
+# 克隆或创建项目
 
 mkdir base64-encoder-decoder
 
 cd base64-encoder-decoder
 
-\# 复制worker.js到项目目录
+# 复制worker.js到项目目录
 
-\# 部署
+# 部署
 
 wrangler deploy worker.js --name base64-encoder-decoder
 
-\# 设置环境变量
+# 设置环境变量
 
 wrangler secret put ENV\_BASE\_DOMAIN
 
