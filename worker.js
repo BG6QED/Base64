@@ -2,11 +2,79 @@ addEventListener('fetch', event => {
     event.respondWith(handleRequest(event.request));
 });
 
+// 从环境变量获取问题库，根据语言选择对应的问题集
+const getQuestionsFromEnv = (lang) => {
+    const envVar = lang === 'en' ? 'ENV_QUESTIONS_EN' : 'ENV_QUESTIONS';
+    
+    // 安全的环境变量检查
+    if (typeof self[envVar] === 'undefined' || self[envVar] === null || self[envVar].trim() === '') {
+        return lang === 'en' ? getDefaultEnglishQuestions() : getDefaultChineseQuestions();
+    }
+    
+    try {
+        return self[envVar].split(',').map(item => {
+            const [question, answer] = item.split('|');
+            return question && answer ? { 
+                question: question.trim(), 
+                answer: answer.trim().toLowerCase() 
+            } : null;
+        }).filter(Boolean);
+    } catch (e) {
+        console.error('解析问题库失败:', e);
+        return lang === 'en' ? getDefaultEnglishQuestions() : getDefaultChineseQuestions();
+    }
+};
+
+// 默认中文问题
+const getDefaultChineseQuestions = () => [
+    { question: "2加2等于多少?", answer: "4" }
+];
+
+// 默认英文问题
+const getDefaultEnglishQuestions = () => [
+    { question: "What is 2 plus 2?", answer: "4" }
+];
+
+// 随机选择一个问题
+const getRandomQuestion = (lang) => {
+    try {
+        const questions = getQuestionsFromEnv(lang);
+        if (questions.length === 0) {
+            return lang === 'en' 
+                ? { question: "What is 2 plus 2?", answer: "4" }
+                : { question: "2加2等于多少?", answer: "4" };
+        }
+        return questions[Math.floor(Math.random() * questions.length)];
+    } catch (e) {
+        console.error('获取随机问题失败:', e);
+        return lang === 'en'
+            ? { question: "What is 2 plus 2?", answer: "4" }
+            : { question: "2加2等于多少?", answer: "4" };
+    }
+};
+
+// 验证答案是否正确
+const validateAnswer = (userAnswer, correctAnswer) => {
+    return userAnswer.trim().toLowerCase() === correctAnswer.toLowerCase();
+};
+
+// 生成问题ID (用于验证时匹配问题和答案)
+const generateQuestionId = (question, answer) => {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(`${question}|${answer}`);
+    return crypto.subtle.digest('SHA-1', data)
+        .then(hash => {
+            return Array.from(new Uint8Array(hash))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('').substring(0, 16);
+        });
+};
+
 // 国际化配置
 const i18n = {
     zh: {
-        title: "信息解码", placeholder: "请点击下方按钮解码", decodeBtn: "解码",
-        copyBtn: "复制结果", hint: "点击按钮解码内容", resultHint: "点击按钮复制或手动选中复制",
+        title: "信息解码", placeholder: "请回答问题后解码", decodeBtn: "解码",
+        copyBtn: "复制结果", hint: "回答问题后点击解码", resultHint: "点击按钮复制或手动选中复制",
         copySuccess: "✅ 复制成功", copyFailed: "复制失败，请手动复制",
         errorNoData: "未获取到可解码的信息", errorInvalid: "输入不是有效的编码",
         errorFail: "解码失败，请检查编码格式或密钥", errorSaltMismatch: "盐值不匹配，无法解码",
@@ -19,11 +87,14 @@ const i18n = {
         encodeInputHint: "输入需要编码的文本...", resultSeparator: "生成的iframe代码",
         noContentToCopy: "没有可复制的内容", noContentForIframe: "没有可生成iframe的内容",
         iframeSuccess: "✅ iframe代码已复制", iframeFailed: "❌ 生成iframe代码失败",
-        encoding: "编码中..."
+        encoding: "编码中...",
+        questionPrompt: "请回答以下问题以解码信息：",
+        answerPlaceholder: "输入答案",
+        wrongAnswer: "答案不正确，请重试"
     },
     en: {
-        title: "Info Decoder", placeholder: "Click button to decode", decodeBtn: "Decode",
-        copyBtn: "Copy Result", hint: "Click to decode content", resultHint: "Click to copy or select text manually",
+        title: "Info Decoder", placeholder: "Answer the question to decode", decodeBtn: "Decode",
+        copyBtn: "Copy Result", hint: "Answer the question then click decode", resultHint: "Click to copy or select text manually",
         copySuccess: "✅ Copied successfully", copyFailed: "Copy failed, please copy manually",
         errorNoData: "No decodable information found", errorInvalid: "Input is not valid encoded data",
         errorFail: "Decoding failed, check format or key", errorSaltMismatch: "Salt mismatch, cannot decode",
@@ -36,7 +107,10 @@ const i18n = {
         encodeInputHint: "Enter text to encode...", resultSeparator: "Generated iframe code",
         noContentToCopy: "No content to copy", noContentForIframe: "No content to generate iframe",
         iframeSuccess: "✅ iframe code copied", iframeFailed: "❌ Failed to generate iframe code",
-        encoding: "Encoding..."
+        encoding: "Encoding...",
+        questionPrompt: "Please answer the following question to continue:",
+        answerPlaceholder: "Enter your answer",
+        wrongAnswer: "Incorrect answer, please try again"
     }
 };
 
@@ -69,6 +143,8 @@ const commonStyles = `
     .status.error { color: var(--danger); }
     .hint { text-align: center; font-size: 12px; color: var(--hint); }
     textarea { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 16px; font-size: 14px; background: transparent; color: inherit; white-space: pre-wrap; word-break: break-all; resize: none; }
+    .question-container { margin-bottom: 16px; }
+    .question-text { margin-bottom: 8px; font-weight: 500; }
 `;
 
 // 公共复制逻辑
@@ -113,14 +189,6 @@ const getOriginFromRequest = request => {
     return typeof ENV_BASE_DOMAIN !== 'undefined' && ENV_BASE_DOMAIN
         ? ENV_BASE_DOMAIN
         : `${url.protocol}//${url.host}`;
-};
-
-const extractDomain = origin => {
-    try {
-        return new URL(origin).hostname;
-    } catch {
-        return '';
-    }
 };
 
 // 工具函数 - 获取盐值
@@ -235,41 +303,56 @@ const escapeHtml = unsafe => {
     return unsafe.replace(/[&<>"']/g, c => escapeMap[c] || c);
 };
 
-// 处理编码 API 请求
 const handleEncodeRequest = async request => {
     try {
         if (request.method !== 'POST') {
             return new Response(JSON.stringify({ success: false, error: 'method_not_allowed' }), {
-                status: 405, headers: { 'Content-Type': 'application/json' }
+                status: 405, headers: { 
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type'
+                }
             });
         }
         const contentType = request.headers.get('Content-Type');
         if (!contentType?.includes('application/json')) {
             return new Response(JSON.stringify({ success: false, error: 'invalid_content_type' }), {
-                status: 400, headers: { 'Content-Type': 'application/json' }
+                status: 400, headers: { 
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type'
+                }
             });
         }
         const { data } = await request.json();
         if (typeof data !== 'string' || data.trim() === '' || data.length > 10000) {
             return new Response(JSON.stringify({ success: false, error: 'invalid_input' }), {
-                status: 400, headers: { 'Content-Type': 'application/json' }
+                status: 400, headers: { 
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type'
+                }
             });
         }
         const encodedData = await encodeWithAdvancedSalt(data);
         if (!encodedData) {
             return new Response(JSON.stringify({ success: false, error: 'encoding_failed' }), {
-                status: 500, headers: { 'Content-Type': 'application/json' }
+                status: 500, headers: { 
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type'
+                }
             });
         }
-        const baseOrigin = getOriginFromRequest(request);
-        const requestOrigin = request.headers.get('Origin') || '';
-        const allowedOrigin = extractDomain(baseOrigin) && extractDomain(requestOrigin) === extractDomain(baseOrigin)
-            ? requestOrigin
-            : baseOrigin;
+        
         return new Response(JSON.stringify({ success: true, encodedData }), {
             headers: {
                 'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': allowedOrigin,
+                'Access-Control-Allow-Origin': '*',
                 'Access-Control-Allow-Methods': 'POST, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type',
                 'Vary': 'Origin'
@@ -277,21 +360,21 @@ const handleEncodeRequest = async request => {
         });
     } catch {
         return new Response(JSON.stringify({ success: false, error: 'server_error' }), {
-            status: 500, headers: { 'Content-Type': 'application/json' }
+            status: 500, headers: { 
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            }
         });
     }
 };
 
 // 处理 CORS 预检请求
 const handleOptionsRequest = request => {
-    const baseOrigin = getOriginFromRequest(request);
-    const requestOrigin = request.headers.get('Origin') || '';
-    const allowedOrigin = extractDomain(baseOrigin) && extractDomain(requestOrigin) === extractDomain(baseOrigin)
-        ? requestOrigin
-        : baseOrigin;
     return new Response(null, {
         headers: {
-            'Access-Control-Allow-Origin': allowedOrigin,
+            'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'POST, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type',
             'Access-Control-Max-Age': '86400',
@@ -301,7 +384,7 @@ const handleOptionsRequest = request => {
 };
 
 // 公共 HTML 模板
-const generatePageTemplate = (title, content, styles, lang, path, buildUrl, scripts = '', isDecodeAction = false) => [
+const generatePageTemplate = (title, content, styles, lang, path, buildUrl, scripts = '', isDecodeResult = false, encodedData = '', encodedContent = '') => [
     '<!DOCTYPE html>',
     `<html lang="${lang}">`,
     '<head>',
@@ -316,12 +399,13 @@ const generatePageTemplate = (title, content, styles, lang, path, buildUrl, scri
     '<body>',
     '<div class="container">',
     `<h1 class="title">${title}</h1>`,
-    `<a href="${buildUrl(path, {}, false, false, isDecodeAction)}" class="lang-switch">${lang === 'zh' ? 'EN' : '中'}</a>`,
+    `<a href="${buildUrl(path, { data: encodedData, content: encodedContent }, false, false, isDecodeResult)}" class="lang-switch">${lang === 'zh' ? 'EN' : '中'}</a>`,
     content,
     '</div>',
     '<script>',
     copyScript,
     `try { localStorage.setItem('preferredLang', '${lang}'); } catch {}`,
+    `${encodedContent ? `try { localStorage.setItem('encodedContent_${lang}', '${escapeHtml(encodedContent)}'); } catch {}` : ''}`,
     scripts,
     '</script>',
     '</body>',
@@ -329,7 +413,7 @@ const generatePageTemplate = (title, content, styles, lang, path, buildUrl, scri
 ].join('');
 
 // 生成编码页面
-const generateEncoderPage = (t, lang, baseDomain, copied, iframeCopied, path, buildUrl) => {
+const generateEncoderPage = (t, lang, baseDomain, copied, iframeCopied, path, buildUrl, savedContent = '') => {
     const styles = `
         .container { max-width: 600px; }
         .lang-switch { border-radius: 4px; }
@@ -341,7 +425,7 @@ const generateEncoderPage = (t, lang, baseDomain, copied, iframeCopied, path, bu
     `;
     const content = [
         '<div class="input-container">',
-        `<textarea id="input" placeholder="${escapeHtml(t.encodeInputHint)}"></textarea>`,
+        `<textarea id="input" placeholder="${escapeHtml(t.encodeInputHint)}">${savedContent ? escapeHtml(savedContent) : ''}</textarea>`,
         '<div class="action-buttons">',
         `<button class="action-btn encode-btn" id="processBtn">${escapeHtml(t.encodeBtn)}</button>`,
         `<button class="action-btn clear-btn" id="clearBtn">${escapeHtml(t.clearBtn)}</button>`,
@@ -366,6 +450,17 @@ const generateEncoderPage = (t, lang, baseDomain, copied, iframeCopied, path, bu
         `el.textContent = msg;`,
         `el.className = \`status \${isSuccess ? 'success' : 'error'}\`;`,
         `};`,
+        `try { 
+            const savedContent = localStorage.getItem('encodedContent_${lang}');
+            if (savedContent && !els.input.value) {
+                els.input.value = savedContent;
+            }
+        } catch {}`,
+        `if (els.input) els.input.addEventListener('input', () => {
+            try {
+                localStorage.setItem('encodedContent_${lang}', els.input.value);
+            } catch {}
+        });`,
         `if (!window.crypto || !window.crypto.subtle) {`,
         `updateStatus(els.status, t.errorCryptoNotSupported, false);`,
         `els.processBtn.disabled = true;`,
@@ -409,6 +504,7 @@ const generateEncoderPage = (t, lang, baseDomain, copied, iframeCopied, path, bu
         `els.iframeCode.textContent = '';`,
         `els.status.textContent = '';`,
         `els.copyBtn.disabled = true;`,
+        `try { localStorage.removeItem('encodedContent_${lang}'); } catch {}`,
         `});`,
         `if (els.copyBtn) els.copyBtn.addEventListener('click', () => {`,
         `const code = els.iframeCode.textContent;`,
@@ -422,11 +518,20 @@ const generateEncoderPage = (t, lang, baseDomain, copied, iframeCopied, path, bu
         `els.copyBtn.disabled = !els.iframeCode.textContent.trim();`,
         `});`
     ].join('\n');
-    return generatePageTemplate(t.homeTitle, content, styles, lang, path, buildUrl, scripts);
+    return generatePageTemplate(t.homeTitle, content, styles, lang, path, buildUrl, scripts, false, '', savedContent);
 };
 
-// 生成解码页面
-const generateDecoderPage = (t, lang, isResultPage, content, encodedData, path, buildUrl) => {
+// 生成解码页面 - 添加问题验证
+const generateDecoderPage = async (t, lang, isResultPage, content, encodedData, path, buildUrl, showQuestion = true, question = null, isWrongAnswer = false) => {
+    if (showQuestion && !question) {
+        question = getRandomQuestion(lang);
+    }
+    
+    let questionId = '';
+    if (question) {
+        questionId = await generateQuestionId(question.question, question.answer);
+    }
+
     const styles = `
         .container { 
             min-width: 300px;
@@ -451,6 +556,9 @@ const generateDecoderPage = (t, lang, isResultPage, content, encodedData, path, 
             box-sizing: border-box; 
         }
         .js-disabled-hint { display: none; }
+        .question-container { margin-bottom: 16px; }
+        .question-text { margin-bottom: 8px; font-weight: 500; }
+        .wrong-answer { color: var(--danger); text-align: center; margin-bottom: 12px; }
 
         noscript .container {
             min-height: 500px;
@@ -475,26 +583,45 @@ const generateDecoderPage = (t, lang, isResultPage, content, encodedData, path, 
         }
     `;
     
-    const contentParts = [
-        isResultPage ? `<noscript><div class="js-disabled-alert">${escapeHtml(t.jsDisabledAlert)}</div></noscript>` : '',
-        `<textarea id="content" readonly>${escapeHtml(content)}</textarea>`,
-        `<div class="status"></div>`,
-        isResultPage
-            ? [
-                '<noscript><style>.js-only { display: none !important; }</style></noscript>',
-                `<button class="action-btn copy-btn js-only" id="copyBtn">${escapeHtml(t.copyBtn)}</button>`
-            ].join('')
-            : [
-                `<form action="${buildUrl('/decode', { action: 'decode' })}" method="GET">`,
-                `<input type="hidden" name="data" value="${encodeURIComponent(encodedData || '')}">`,
-                `<input type="hidden" name="action" value="decode">`,
-                `<input type="hidden" name="lang" value="${lang}">`,
-                `<button type="submit" class="action-btn decode-btn">${escapeHtml(t.decodeBtn)}</button>`,
-                '</form>'
-            ].join(''),
-        `<div class="hint">${escapeHtml(isResultPage ? t.resultHint : t.hint)}</div>`,
-        isResultPage ? `<div class="hint js-disabled-hint">${escapeHtml(t.jsDisabledHint)}</div>` : ''
-    ];
+    let contentParts = [];
+    
+    if (isResultPage) {
+        contentParts = [
+            `<noscript><div class="js-disabled-alert">${escapeHtml(t.jsDisabledAlert)}</div></noscript>`,
+            `<textarea id="content" readonly>${escapeHtml(content)}</textarea>`,
+            `<div class="status"></div>`,
+            '<noscript><style>.js-only { display: none !important; }</style></noscript>',
+            `<button class="action-btn copy-btn js-only" id="copyBtn">${escapeHtml(t.copyBtn)}</button>`,
+            `<div class="hint">${escapeHtml(t.resultHint)}</div>`,
+            `<div class="hint js-disabled-hint">${escapeHtml(t.jsDisabledHint)}</div>`
+        ];
+    } 
+    else if (showQuestion && question) {
+        contentParts = [
+            isWrongAnswer ? `<div class="wrong-answer">${escapeHtml(t.wrongAnswer)}</div>` : '',
+            `<div class="question-container">`,
+            `<div class="question-text">${escapeHtml(t.questionPrompt)}</div>`,
+            `<div>${escapeHtml(question.question)}</div>`,
+            `</div>`,
+            `<form action="${buildUrl('/decode', { action: 'decode' })}" method="POST">`,
+            `<input type="hidden" name="data" value="${encodeURIComponent(encodedData || '')}">`,
+            `<input type="hidden" name="questionId" value="${questionId}">`,
+            `<input type="hidden" name="correctAnswer" value="${encodeURIComponent(question.answer)}">`,
+            `<input type="hidden" name="lang" value="${lang}">`,
+            `<input type="text" name="userAnswer" placeholder="${escapeHtml(t.answerPlaceholder)}" required class="action-btn" style="color: var(--text); background: transparent; border: 1px solid var(--border); margin-bottom: 12px;">`,
+            `<button type="submit" class="action-btn decode-btn">${escapeHtml(t.decodeBtn)}</button>`,
+            '</form>',
+            `<div class="hint">${escapeHtml(t.hint)}</div>`
+        ];
+    }
+    else {
+        contentParts = [
+            `<textarea id="content" readonly>${escapeHtml(content)}</textarea>`,
+            `<div class="status error">${escapeHtml(content)}</div>`,
+            `<a href="${buildUrl('/decode', { data: encodedData })}" class="action-btn encode-btn">${escapeHtml(t.decodeBtn)}</a>`,
+            `<div class="hint">${escapeHtml(t.hint)}</div>`
+        ];
+    }
     
     const scripts = isResultPage ? [
         `const contentEl = document.getElementById('content');`,
@@ -541,7 +668,7 @@ const generateDecoderPage = (t, lang, isResultPage, content, encodedData, path, 
         `document.querySelector('.js-disabled-hint').style.display = 'none';`
     ].join('\n') : '';
     
-    return generatePageTemplate(t.title, contentParts.join(''), styles, lang, path, buildUrl, scripts, isResultPage);
+    return generatePageTemplate(t.title, contentParts.join(''), styles, lang, path, buildUrl, scripts, isResultPage, encodedData);
 };
 
 // 主请求处理函数
@@ -559,6 +686,18 @@ const handleRequest = async request => {
     let lang = searchParams.get('lang') || '';
     const copied = searchParams.get('copied') === 'true';
     const iframeCopied = searchParams.get('iframeCopied') === 'true';
+    const encodedContent = searchParams.get('content') || '';
+    let decodedContent = '';
+    
+    // 解码content参数
+    if (encodedContent) {
+        try {
+            decodedContent = decodeURIComponent(encodedContent);
+        } catch (e) {
+            console.error('解码content参数失败:', e);
+            decodedContent = encodedContent;
+        }
+    }
 
     // 从引用页获取数据
     if (!encodedData) {
@@ -583,61 +722,128 @@ const handleRequest = async request => {
     const t = i18n[lang];
     const baseDomain = getOriginFromRequest(request);
 
-    // URL 构建工具 - 修复语言切换时保留解码状态
-    const buildUrl = (targetPath, extraParams = {}, preserveLang = false, preserveAction = false, isDecodeAction = false) => {
+    const buildUrl = (targetPath, extraParams = {}, preserveLang = false, preserveAction = false, isDecodeResult = false) => {
         const params = new URLSearchParams();
-        if (encodedData) params.append('data', encodeURIComponent(encodedData));
-        params.append('lang', preserveLang ? lang : lang === 'zh' ? 'en' : 'zh');
-        
-        // 对于解码结果页，保留action参数以维持解码状态
-        if (targetPath === '/decode' && isDecodeAction && !preserveAction) {
-            params.append('action', 'decode');
+
+        const dataValue = extraParams.data || encodedData;
+        if (dataValue) params.append('data', encodeURIComponent(dataValue));
+
+        const contentValue = extraParams.content || (targetPath === '/' && encodedContent ? encodedContent : '');
+        if (contentValue) params.append('content', encodeURIComponent(contentValue));
+
+        // 修复语言切换问题：总是切换到相反语言，不管当前页面类型
+        const newLang = lang === 'zh' ? 'en' : 'zh';
+        params.append('lang', newLang);
+
+        const currentAction = searchParams.get('action');
+        // 对于解码结果页面，切换语言时清除action参数，直接显示新语言的问题页面
+        if (targetPath === '/decode' && !isDecodeResult && currentAction && preserveAction && !isDecodeResult) {
+            params.append('action', currentAction);
         }
         
+        // 添加其他参数
         Object.entries(extraParams).forEach(([key, value]) => {
-            if (value !== undefined && value !== null && value !== '') {
+            if (key !== 'data' && key !== 'lang' && key !== 'content' && value !== undefined && value !== null && value !== '') {
                 params.set(key, value.toString());
             }
         });
+        
         const query = params.toString();
         return `${baseDomain}${targetPath}${query ? '?' + query : ''}`;
     };
 
     // 编码页面路由
     if (['/', '/index.html', '/encode'].includes(path)) {
-        return new Response(generateEncoderPage(t, lang, baseDomain, copied, iframeCopied, path, buildUrl), {
-            headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        return new Response(generateEncoderPage(t, lang, baseDomain, copied, iframeCopied, path, buildUrl, decodedContent), {
+            headers: { 
+                'Content-Type': 'text/html; charset=utf-8',
+                'X-Frame-Options': 'ALLOWALL',
+                'Permissions-Policy': 'clipboard-write=(self)'
+            }
         });
     }
 
     // 解码页面路由
     if (path === '/decode') {
         const isDecodeAction = searchParams.get('action') === 'decode';
-        if (isDecodeAction && encodedData) {
-            const decodeResult = await decodeWithAdvancedSalt(encodedData);
-            let message = decodeResult.message;
-            if (!decodeResult.success) {
-                const errorMap = {
-                    'no_data': t.errorNoData,
-                    'invalid_format': t.errorInvalid,
-                    'salt_mismatch': t.errorSaltMismatch,
-                    'integrity_failed': t.errorIntegrityFailed,
-                    'crypto_not_supported': t.errorCryptoNotSupported,
-                    'decoding_failed': t.errorFail
-                };
-                message = errorMap[message] || t.errorFail;
+        
+        // 处理表单提交（验证答案）
+        if (request.method === 'POST' && isDecodeAction) {
+            const formData = await request.formData();
+            const userAnswer = formData.get('userAnswer') || '';
+            const correctAnswer = formData.get('correctAnswer') || '';
+            encodedData = formData.get('data') || '';
+            const currentLang = formData.get('lang') || 'zh';
+            const currentT = i18n[currentLang];
+            
+            // 验证答案
+            if (validateAnswer(userAnswer, correctAnswer)) {
+                // 答案正确，执行解码
+                const decodeResult = await decodeWithAdvancedSalt(encodedData);
+                let message = decodeResult.message;
+                if (!decodeResult.success) {
+                    const errorMap = {
+                        'no_data': currentT.errorNoData,
+                        'invalid_format': currentT.errorInvalid,
+                        'salt_mismatch': currentT.errorSaltMismatch,
+                        'integrity_failed': currentT.errorIntegrityFailed,
+                        'crypto_not_supported': currentT.errorCryptoNotSupported,
+                        'decoding_failed': currentT.errorFail
+                    };
+                    message = errorMap[message] || currentT.errorFail;
+                }
+                const html = await generateDecoderPage(currentT, currentLang, true, message, encodedData, path, buildUrl, false);
+                return new Response(html, {
+                    headers: { 
+                        'Content-Type': 'text/html; charset=utf-8',
+                        'X-Frame-Options': 'ALLOWALL',
+                        'Permissions-Policy': 'clipboard-write=(self)'
+                    }
+                });
+            } else {
+                // 答案错误，重新显示问题
+                const question = getRandomQuestion(currentLang);
+                const html = await generateDecoderPage(currentT, currentLang, false, currentT.placeholder, encodedData, path, buildUrl, true, question, true);
+                return new Response(html, {
+                    headers: { 
+                        'Content-Type': 'text/html; charset=utf-8',
+                        'X-Frame-Options': 'ALLOWALL',
+                        'Permissions-Policy': 'clipboard-write=(self)'
+                    }
+                });
             }
-            return new Response(generateDecoderPage(t, lang, true, message, encodedData, path, buildUrl), {
-                headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        }
+        
+        // 首次访问解码页面，显示问题
+        if (!isDecodeAction && encodedData) {
+            const html = await generateDecoderPage(t, lang, false, t.placeholder, encodedData, path, buildUrl);
+            return new Response(html, {
+                headers: { 
+                    'Content-Type': 'text/html; charset=utf-8',
+                    'X-Frame-Options': 'ALLOWALL',
+                    'Permissions-Policy': 'clipboard-write=(self)'
+                }
             });
         }
-        return new Response(generateDecoderPage(t, lang, false, t.placeholder, encodedData, path, buildUrl), {
-            headers: { 'Content-Type': 'text/html; charset=utf-8' }
-        });
+        
+        // 没有编码数据的情况
+        if (!encodedData) {
+            const html = await generateDecoderPage(t, lang, false, t.errorNoData, encodedData, path, buildUrl, false);
+            return new Response(html, {
+                headers: { 
+                    'Content-Type': 'text/html; charset=utf-8',
+                    'X-Frame-Options': 'ALLOWALL',
+                    'Permissions-Policy': 'clipboard-write=(self)'
+                }
+            });
+        }
     }
 
     // 404 响应
     return new Response('Not found', {
-        status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+        status: 404, headers: { 
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Frame-Options': 'ALLOWALL'
+        }
     });
 };
