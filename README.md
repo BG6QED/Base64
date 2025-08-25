@@ -103,16 +103,8 @@ wrangler secret put ENV\_SECURITY\_SALT
 
 > **⚠️ 安全警告**
 >
-> ：生产环境必须设置随机 
->
-> `ENV_SECURITY_SALT`
->
-> （32 字节以上）和正确的 
->
-> `ENV_BASE_DOMAIN`
->
-> 。更改盐值会导致旧数据无法解码。
+> 生产环境必须设置随机 `ENV_SECURITY_SALT`（32 字节以上）和正确的`ENV_BASE_DOMAIN`。更改盐值会导致旧数据无法解码。
 
 > **提示**
 >
-> ：部署后可在 Workers 控制台的 "设置" 标签中绑定自定义域名。
+> 部署后可在 Workers 控制台的 "设置" 标签中绑定自定义域名。
