@@ -2,6 +2,11 @@ addEventListener('fetch', event => {
     event.respondWith(handleRequest(event.request));
 });
 
+// A temporary storage for question IDs and their correct answers.
+// In a production environment, a more persistent and scalable storage
+// solution like a key-value store (e.g., Cloudflare Workers KV) should be used.
+const questionStore = new Map();
+
 // 从环境变量获取问题库，根据语言选择对应的问题集
 const getQuestionsFromEnv = (lang) => {
     const envVar = lang === 'en' ? 'ENV_QUESTIONS_EN' : 'ENV_QUESTIONS';
@@ -257,7 +262,8 @@ const decodeWithAdvancedSalt = async encodedData => {
         return { success: false, message: 'crypto_not_supported' };
     }
     try {
-        if (!encodedData || typeof encodedData !== 'string') {
+        // Added length check for encodedData
+        if (!encodedData || typeof encodedData !== 'string' || encodedData.length > 20000) {
             return { success: false, message: 'no_data' };
         }
         const salt = getSalt();
@@ -292,6 +298,7 @@ const decodeWithAdvancedSalt = async encodedData => {
         const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, encryptionKey, encrypted);
         return { success: true, message: new TextDecoder().decode(decrypted) };
     } catch {
+        // Return a generic error message to avoid leaking information
         return { success: false, message: 'decoding_failed' };
     }
 };
@@ -301,6 +308,29 @@ const escapeHtml = unsafe => {
     if (!unsafe) return '';
     const escapeMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
     return unsafe.replace(/[&<>"']/g, c => escapeMap[c] || c);
+};
+
+// 生成 CSRF 令牌
+const generateCsrfToken = async () => {
+    const randomBytes = crypto.getRandomValues(new Uint8Array(32));
+    const token = Array.from(randomBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    const hmacKey = await deriveKey(new TextEncoder().encode(getSalt()), ['sign'], 'HMAC');
+    const hmac = await crypto.subtle.sign({ name: 'HMAC' }, hmacKey, new TextEncoder().encode(token));
+    const hmacHex = Array.from(new Uint8Array(hmac)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return `${token}.${hmacHex}`;
+};
+
+// 验证 CSRF 令牌
+const verifyCsrfToken = async (token) => {
+    try {
+        const [randomPart, hmacPart] = token.split('.');
+        if (!randomPart || !hmacPart) return false;
+        const hmacKey = await deriveKey(new TextEncoder().encode(getSalt()), ['verify'], 'HMAC');
+        const hmac = new Uint8Array(hmacPart.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+        return await crypto.subtle.verify({ name: 'HMAC' }, hmacKey, hmac, new TextEncoder().encode(randomPart));
+    } catch {
+        return false;
+    }
 };
 
 const handleEncodeRequest = async request => {
@@ -359,6 +389,7 @@ const handleEncodeRequest = async request => {
             }
         });
     } catch {
+        // Return a generic server error
         return new Response(JSON.stringify({ success: false, error: 'server_error' }), {
             status: 500, headers: { 
                 'Content-Type': 'application/json',
@@ -522,7 +553,7 @@ const generateEncoderPage = (t, lang, baseDomain, copied, iframeCopied, path, bu
 };
 
 // 生成解码页面 - 添加问题验证
-const generateDecoderPage = async (t, lang, isResultPage, content, encodedData, path, buildUrl, showQuestion = true, question = null, isWrongAnswer = false) => {
+const generateDecoderPage = async (t, lang, isResultPage, content, encodedData, path, buildUrl, showQuestion = true, question = null, isWrongAnswer = false, csrfToken = '') => {
     if (showQuestion && !question) {
         question = getRandomQuestion(lang);
     }
@@ -530,8 +561,10 @@ const generateDecoderPage = async (t, lang, isResultPage, content, encodedData, 
     let questionId = '';
     if (question) {
         questionId = await generateQuestionId(question.question, question.answer);
+        // Store the correct answer server-side for validation
+        questionStore.set(questionId, question.answer);
     }
-
+    
     const styles = `
         .container { 
             min-width: 300px;
@@ -606,7 +639,7 @@ const generateDecoderPage = async (t, lang, isResultPage, content, encodedData, 
             `<form action="${buildUrl('/decode', { action: 'decode' })}" method="POST">`,
             `<input type="hidden" name="data" value="${encodeURIComponent(encodedData || '')}">`,
             `<input type="hidden" name="questionId" value="${questionId}">`,
-            `<input type="hidden" name="correctAnswer" value="${encodeURIComponent(question.answer)}">`,
+            `<input type="hidden" name="csrfToken" value="${csrfToken}">`,
             `<input type="hidden" name="lang" value="${lang}">`,
             `<input type="text" name="userAnswer" placeholder="${escapeHtml(t.answerPlaceholder)}" required class="action-btn" style="color: var(--text); background: transparent; border: 1px solid var(--border); margin-bottom: 12px;">`,
             `<button type="submit" class="action-btn decode-btn">${escapeHtml(t.decodeBtn)}</button>`,
@@ -771,14 +804,20 @@ const handleRequest = async request => {
         if (request.method === 'POST' && isDecodeAction) {
             const formData = await request.formData();
             const userAnswer = formData.get('userAnswer') || '';
-            const correctAnswer = formData.get('correctAnswer') || '';
+            const questionId = formData.get('questionId') || '';
             encodedData = formData.get('data') || '';
+            const csrfToken = formData.get('csrfToken') || '';
             const currentLang = formData.get('lang') || 'zh';
             const currentT = i18n[currentLang];
             
-            // 验证答案
-            if (validateAnswer(userAnswer, correctAnswer)) {
-                // 答案正确，执行解码
+            // CSRF protection and secure answer validation
+            const isCsrfValid = await verifyCsrfToken(csrfToken);
+            const correctAnswer = questionStore.get(questionId);
+
+            if (isCsrfValid && correctAnswer && validateAnswer(userAnswer, correctAnswer)) {
+                // Remove the used question from the store
+                questionStore.delete(questionId);
+
                 const decodeResult = await decodeWithAdvancedSalt(encodedData);
                 let message = decodeResult.message;
                 if (!decodeResult.success) {
@@ -801,9 +840,10 @@ const handleRequest = async request => {
                     }
                 });
             } else {
-                // 答案错误，重新显示问题
+                // Incorrect answer or invalid CSRF token, re-show question
                 const question = getRandomQuestion(currentLang);
-                const html = await generateDecoderPage(currentT, currentLang, false, currentT.placeholder, encodedData, path, buildUrl, true, question, true);
+                const newCsrfToken = await generateCsrfToken();
+                const html = await generateDecoderPage(currentT, currentLang, false, currentT.placeholder, encodedData, path, buildUrl, true, question, true, newCsrfToken);
                 return new Response(html, {
                     headers: { 
                         'Content-Type': 'text/html; charset=utf-8',
@@ -816,7 +856,8 @@ const handleRequest = async request => {
         
         // 首次访问解码页面，显示问题
         if (!isDecodeAction && encodedData) {
-            const html = await generateDecoderPage(t, lang, false, t.placeholder, encodedData, path, buildUrl);
+            const csrfToken = await generateCsrfToken();
+            const html = await generateDecoderPage(t, lang, false, t.placeholder, encodedData, path, buildUrl, true, null, false, csrfToken);
             return new Response(html, {
                 headers: { 
                     'Content-Type': 'text/html; charset=utf-8',
