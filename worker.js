@@ -389,7 +389,7 @@ const getEncoderPageContent = (t, baseDomain, pageState) => {
                     if (!response.ok) throw new Error(\`Server error: \${response.status}\`);
                     const { success, encodedData, error } = await response.json();
                     if (success && encodedData) {
-                        const iframeCode = \`<iframe src="\${baseDomain}/decode?data=\${encodeURIComponent(encodedData)}" style="width: 100%; height: 420px; border: none; overflow: auto;"></iframe>\`;
+                        const iframeCode = \`<iframe src="\${baseDomain}/decode?data=\${encodeURIComponent(encodedData)}" style="width: 95%; height: 420px; border: none; overflow: auto;" frameborder="0"></iframe>\`;
                         els.iframeCode.textContent = iframeCode;
                         updateStatus(els.status, i18n[currentLang].iframeSuccess, true);
                         els.copyBtn.disabled = false;
@@ -423,19 +423,19 @@ const getDecoderPageContent = async (t, lang, pageState) => {
         .container { 
             min-width: 300px;
             width: 100%; 
-            height: 100%; 
+            height: 100%; /* 填充 iframe 高度 */
             padding: 16px; 
             overflow: visible; 
             box-sizing: border-box; 
-            background: transparent;
-            display: flex;
-            flex-direction: column; 
-            justify-content: center; 
-            align-items: center;
+            background: transparent; /* 确保透明，继承 iframe 背景 */
+            display: flex; /* 使用 flex 布局 */
+            flex-direction: column; /* 垂直排列 */
+            justify-content: center; /* 垂直居中 */
+            align-items: center; /* 水平居中 */
         }
         .title { 
             font-size: 18px; 
-            width: 100%; 
+            width: 100%; /* 确保标题宽度一致 */
             text-align: center;
         }
         .lang-switch { 
@@ -469,21 +469,21 @@ const getDecoderPageContent = async (t, lang, pageState) => {
         }
         .js-disabled-hint { 
             display: none; 
-            width: 100%;
+            width: 100%; /* 确保宽度一致 */
         }
         .question-container { 
-            margin-bottom: 25px; 
-            width: 100%;
+            margin-bottom: 25px; /* 与 .section-two 的 gap: 25px 一致 */
+            width: 100%; /* 确保宽度一致 */
             box-sizing: border-box;
         }
         .question-text { 
             margin-bottom: 8px; 
             font-weight: 500; 
-            width: 100%;
+            width: 100%; /* 确保宽度一致 */
         }
         .answer-input { 
             width: 100%; 
-            max-width: 100%;
+            max-width: 100%; /* 防止溢出 */
             padding: 10px; 
             border: 1px solid var(--border); 
             border-radius: 6px; 
@@ -495,7 +495,7 @@ const getDecoderPageContent = async (t, lang, pageState) => {
         }
         .decode-btn { 
             width: 100%; 
-            max-width: 100%;
+            max-width: 100%; /* 防止溢出 */
             padding: 10px 0; 
             border: none; 
             border-radius: 6px; 
