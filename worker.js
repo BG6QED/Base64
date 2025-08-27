@@ -107,7 +107,15 @@ const commonStyles = `
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
     body { padding: 10px; background: var(--bg); color: var(--text); min-height: 100vh; }
-    .container { margin: 20px auto; background: var(--card); padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); position: relative; }
+    .container { 
+        margin: 20px auto; 
+        background: var(--card); 
+        padding: 20px; 
+        border-radius: 8px; 
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1); 
+        position: relative;
+        max-width: 700px;
+    }
     .title { color: var(--primary); font-weight: 600; text-align: center; margin-bottom: 20px; }
     .lang-switch { position: absolute; right: 20px; top: 20px; background: var(--primary); color: white; border: none; padding: 4px 8px; cursor: pointer; font-size: 14px; text-decoration: none; border-radius: 4px; }
     .action-btn { width: 100%; padding: 10px 0; border: none; border-radius: 6px; color: white; cursor: pointer; font-size: 15px; font-weight: 500; margin-bottom: 12px; }
@@ -119,7 +127,7 @@ const commonStyles = `
     .status.success { color: var(--success); }
     .status.error { color: var(--danger); }
     .hint { text-align: center; font-size: 12px; color: var(--hint); }
-    textarea { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 16px; font-size: 14px; background: transparent; color: inherit; white-space: pre-wrap; word-break: break-all; resize: none; }
+    textarea, .answer-input { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 16px; font-size: 14px; background: transparent; color: inherit; white-space: pre-wrap; word-break: break-all; resize: none; }
     .question-container { margin-bottom: 16px; }
     .question-text { margin-bottom: 8px; font-weight: 500; }
     .wrong-answer { color: var(--danger); text-align: center; margin-bottom: 12px; }
@@ -130,8 +138,13 @@ const getOriginFromRequest = request => {
     return typeof ENV_BASE_DOMAIN !== 'undefined' && ENV_BASE_DOMAIN ? ENV_BASE_DOMAIN : `${url.protocol}//${url.host}`;
 };
 
-const salt = typeof ENV_SECURITY_SALT !== 'undefined' && ENV_SECURITY_SALT ? ENV_SECURITY_SALT : 'development_only_default_salt_should_be_changed';
-const getSalt = () => salt;
+const getSalt = () => {
+    const salt = typeof ENV_SECURITY_SALT !== 'undefined' ? ENV_SECURITY_SALT : null;
+    if (!salt) {
+        throw new Error('ENV_SECURITY_SALT environment variable is not set. This is a critical security requirement.');
+    }
+    return salt;
+};
 
 const isCryptoSupported = () => typeof crypto !== 'undefined' && typeof crypto.subtle !== 'undefined';
 
@@ -153,7 +166,7 @@ const deriveKey = async (saltBytes, keyUsage, algorithm) => {
 };
 
 const encodeWithAdvancedSalt = async data => {
-    if (!isCryptoSupported() || typeof data !== 'string' || data.trim() === '' || data.length > 10000 || !getSalt()) return null;
+    if (!isCryptoSupported() || typeof data !== 'string' || data.trim() === '' || data.length > 10000) return null;
     try {
         const encoder = new TextEncoder();
         const [dataBytes, saltBytes] = [encoder.encode(data), encoder.encode(getSalt())];
@@ -170,7 +183,7 @@ const encodeWithAdvancedSalt = async data => {
 };
 
 const decodeWithAdvancedSalt = async encodedData => {
-    if (!isCryptoSupported() || !encodedData || typeof encodedData !== 'string' || encodedData.length > 20000 || !getSalt()) {
+    if (!isCryptoSupported() || !encodedData || typeof encodedData !== 'string' || encodedData.length > 20000) {
         return { success: false, message: encodedData ? 'no_data' : 'invalid_format' };
     }
     try {
@@ -376,7 +389,7 @@ const getEncoderPageContent = (t, baseDomain, pageState) => {
                     if (!response.ok) throw new Error(\`Server error: \${response.status}\`);
                     const { success, encodedData, error } = await response.json();
                     if (success && encodedData) {
-                        const iframeCode = \`<iframe src="\${baseDomain}/decode?data=\${encodeURIComponent(encodedData)}" width="500" height="420" style="border: none;" frameborder="0" scrolling="no"></iframe>\`;
+                        const iframeCode = \`<iframe src="\${baseDomain}/decode?data=\${encodeURIComponent(encodedData)}" style="width: 100%; height: 420px; border: none; overflow: auto;"></iframe>\`;
                         els.iframeCode.textContent = iframeCode;
                         updateStatus(els.status, i18n[currentLang].iframeSuccess, true);
                         els.copyBtn.disabled = false;
@@ -406,7 +419,131 @@ const getEncoderPageContent = (t, baseDomain, pageState) => {
 };
 
 const getDecoderPageContent = async (t, lang, pageState) => {
-    const styles = `.container { min-width: 300px; max-width: 100%; width: 100%; height: auto; min-height: 300px; padding: 16px; overflow: visible; box-sizing: border-box; } .title { font-size: 18px; } .lang-switch { border-radius: 50%; width: 28px; height: 28px; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; } .js-disabled-alert { background: var(--js-disabled-bg); color: var(--js-disabled-text); padding: 8px; border-radius: 6px; margin-bottom: 16px; font-size: 12px; text-align: center; } #content { width: 100%; min-height: 150px; height: auto; max-height: 400px; user-select: text; overflow-y: auto; box-sizing: border-box; } .js-disabled-hint { display: none; } .question-container { margin-bottom: 16px; } .question-text { margin-bottom: 8px; font-weight: 500; } .wrong-answer { color: var(--danger); text-align: center; margin-bottom: 12px; } noscript .container { min-height: 500px; } noscript #content { min-height: 200px; white-space: pre-wrap; word-break: break-all; } noscript .js-disabled-hint { display: block; margin-top: 10px; color: var(--js-disabled-text); } @media (max-width: 600px) { .container { padding: 10px; min-height: 250px; } noscript .container { min-height: 350px; } .title { font-size: 16px; } #content { min-height: 120px; } noscript #content { min-height: 180px; } }`;
+    const styles = `
+        .container { 
+            min-width: 300px;
+            width: 100%; 
+            height: 100%; 
+            padding: 16px; 
+            overflow: visible; 
+            box-sizing: border-box; 
+            background: transparent;
+            display: flex;
+            flex-direction: column; 
+            justify-content: center; 
+            align-items: center;
+        }
+        .title { 
+            font-size: 18px; 
+            width: 100%; 
+            text-align: center;
+        }
+        .lang-switch { 
+            border-radius: 50%; 
+            width: 28px; 
+            height: 28px; 
+            font-size: 12px; 
+            font-weight: bold; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+        }
+        .js-disabled-alert { 
+            background: var(--js-disabled-bg); 
+            color: var(--js-disabled-text); 
+            padding: 8px; 
+            border-radius: 6px; 
+            margin-bottom: 16px; 
+            font-size: 12px; 
+            text-align: center; 
+            width: 100%; /* 确保宽度一致 */
+        }
+        #content { 
+            width: 100%; 
+            min-height: 150px; 
+            height: auto; 
+            max-height: 400px;
+            user-select: text; 
+            overflow-y: auto; 
+            box-sizing: border-box; 
+        }
+        .js-disabled-hint { 
+            display: none; 
+            width: 100%;
+        }
+        .question-container { 
+            margin-bottom: 25px; 
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .question-text { 
+            margin-bottom: 8px; 
+            font-weight: 500; 
+            width: 100%;
+        }
+        .answer-input { 
+            width: 100%; 
+            max-width: 100%;
+            padding: 10px; 
+            border: 1px solid var(--border); 
+            border-radius: 6px; 
+            margin-bottom: 16px; 
+            font-size: 14px; 
+            background: transparent; 
+            color: inherit; 
+            box-sizing: border-box;
+        }
+        .decode-btn { 
+            width: 100%; 
+            max-width: 100%;
+            padding: 10px 0; 
+            border: none; 
+            border-radius: 6px; 
+            color: white; 
+            cursor: pointer; 
+            font-size: 15px; 
+            font-weight: 500; 
+            margin-bottom: 12px; 
+            background: var(--primary); 
+        }
+        .wrong-answer { 
+            color: var(--danger); 
+            text-align: center; 
+            margin-bottom: 12px; 
+            width: 100%; /* 确保宽度一致 */
+        }
+        noscript .container {
+            min-height: 500px;
+        }
+        noscript #content {
+            min-height: 300px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        noscript .js-disabled-hint {
+            display: block;
+            margin-top: 10px;
+            color: var(--js-disabled-text);
+        }
+        @media (max-width: 600px) {
+            .container { 
+                padding: 10px; 
+                height: 100%; /* 保持填充 iframe */
+            }
+            noscript .container { 
+                min-height: 350px; 
+            }
+            .title { 
+                font-size: 16px; 
+            }
+            #content { 
+                min-height: 120px; 
+            }
+            noscript #content { 
+                min-height: 180px; 
+            }
+        }
+    `;
     let contentParts = [];
     let scripts = '';
     
@@ -461,7 +598,7 @@ const getDecoderPageContent = async (t, lang, pageState) => {
             `<input type="hidden" name="questionId" value="${questionId}">`,
             `<input type="hidden" name="csrfToken" value="${csrfToken}">`,
             `<input type="hidden" name="lang" value="${lang}">`,
-            `<input type="text" name="userAnswer" placeholder="${escapeHtml(t.answerPlaceholder)}" required class="action-btn" style="color: var(--text); background: transparent; border: 1px solid var(--border); margin-bottom: 12px;">`,
+            `<input type="text" name="userAnswer" placeholder="${escapeHtml(t.answerPlaceholder)}" required class="answer-input">`,
             `<button type="submit" class="action-btn decode-btn">${escapeHtml(t.decodeBtn)}</button>`,
             '</form>',
             `<div class="hint">${escapeHtml(t.hint)}</div>`
@@ -542,7 +679,7 @@ const handleRequest = async request => {
             const tempEncodedData = await encodeWithAdvancedSalt(content);
             if (tempEncodedData) {
                 pageState.isEncodeResult = true;
-                pageState.iframeCode = `<iframe src="${baseDomain}/decode?data=${encodeURIComponent(tempEncodedData)}" width="500" height="420" style="border: none;" frameborder="0" scrolling="no"></iframe>`;
+                pageState.iframeCode = `<iframe src="${baseDomain}/decode?data=${encodeURIComponent(tempEncodedData)}" style="width: 95%; height: 420px; border: none; overflow: auto;" frameborder="0"></iframe>`;
             }
         }
         ({ content: pageContent, styles: pageStyle, scripts: pageScript } = getEncoderPageContent(t, baseDomain, pageState));
